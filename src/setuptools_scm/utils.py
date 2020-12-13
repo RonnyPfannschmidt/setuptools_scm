@@ -41,21 +41,56 @@ def no_git_env(env):
     }
 
 
-def trace(*k):
+def trace(
+    key,
+    var=None,
+    *wrong_to_pass,
+    indent=1,
+    **kw,
+):
     if DEBUG:
-        print(*k)
+        assert not wrong_to_pass
+
+        if var or kw:
+            print("  " * (indent - 1), end="")
+            print(key + ": ", end="")
+
+        if not var:
+            if kw:
+                print()
+        else:
+            if getattr(var, "splitlines", None) is not None:
+                print()
+                for line in var.splitlines():
+                    print("  " * indent, _ensure_str(line))
+            else:
+                if isinstance(var, dict):
+                    print()
+                    for k, v in var.items():
+                        trace(k, v, indent=indent + 1)
+                else:
+
+                    print(var)
+        for k, v in kw.items():
+            trace(k, v, indent=indent + 1)
+
         sys.stdout.flush()
 
 
 def trace_exception():
-    DEBUG and traceback.print_exc()
+    if DEBUG:
+        traceback.print_exc()
+
+
+def _ensure_str(str_or_bytes):
+    if isinstance(str_or_bytes, str):
+        return str_or_bytes
+    else:
+        return str_or_bytes.decode("utf-8", "surrogateescape")
 
 
 def ensure_stripped_str(str_or_bytes):
-    if isinstance(str_or_bytes, str):
-        return str_or_bytes.strip()
-    else:
-        return str_or_bytes.decode("utf-8", "surrogateescape").strip()
+    return _ensure_str(str_or_bytes).strip()
 
 
 def _always_strings(env_dict):
@@ -88,24 +123,19 @@ def _popen_pipes(cmd, cwd):
 
 
 def do_ex(cmd, cwd="."):
-    trace("cmd", repr(cmd))
+    trace("cmd", cmd)
     if os.name == "posix" and not isinstance(cmd, (list, tuple)):
         cmd = shlex.split(cmd)
 
     p = _popen_pipes(cmd, cwd)
     out, err = p.communicate()
-    if out:
-        trace("out", repr(out))
-    if err:
-        trace("err", repr(err))
-    if p.returncode:
-        trace("ret", p.returncode)
+    trace("results", out=out, err=err, ret=p.returncode, indent=2)
     return ensure_stripped_str(out), ensure_stripped_str(err), p.returncode
 
 
 def do(cmd, cwd="."):
     out, err, ret = do_ex(cmd, cwd)
-    if ret:
+    if ret and not DEBUG:
         print(err)
     return out
 
@@ -136,7 +166,7 @@ def has_command(name, warn=True):
     try:
         p = _popen_pipes([name, "help"], ".")
     except OSError:
-        trace(*sys.exc_info())
+        trace_exception()
         res = False
     else:
         p.communicate()

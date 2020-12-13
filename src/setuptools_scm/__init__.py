@@ -98,18 +98,18 @@ def dump_version(root, version, write_to, template=None):
 
 
 def _do_parse(config):
-
-    trace("dist name:", config.dist_name)
+    trace("dist", name=config.dist_name)
     if config.dist_name is not None:
-        pretended = os.environ.get(
-            PRETEND_KEY_NAMED.format(name=config.dist_name.upper())
-        )
+        key = PRETEND_KEY_NAMED.format(name=config.dist_name.upper())
+
+        pretended = os.environ.get(key)
+        trace("pretend key", name=key, pretended=pretended)
     else:
         pretended = None
 
     if pretended is None:
         pretended = os.environ.get(PRETEND_KEY)
-
+        trace("pretend key", name=PRETEND_KEY, pretended=pretended)
     if pretended:
         # we use meta here since the pretended version
         # must adhere to the pep to begin with

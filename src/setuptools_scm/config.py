@@ -27,7 +27,7 @@ def _check_tag_regex(value):
 
 
 def _check_absolute_root(root, relative_to):
-    trace("l", repr(locals()))
+    trace("paths", root=root, relative_to=relative_to)
     if relative_to:
         if os.path.isabs(root) and not root.startswith(relative_to):
             warnings.warn(
@@ -40,10 +40,10 @@ def _check_absolute_root(root, relative_to):
                 " its the directory %r\n"
                 "assuming the parent directory was passed" % (relative_to,)
             )
-            trace("dir", relative_to)
+            trace("dir", relative_to, indent=2)
             root = os.path.join(relative_to, root)
         else:
-            trace("file", relative_to)
+            trace("file", relative_to, indent=2)
             root = os.path.join(os.path.dirname(relative_to), root)
     return os.path.abspath(root)
 
@@ -104,8 +104,7 @@ class Configuration(object):
     def relative_to(self, value):
         self._absolute_root = _check_absolute_root(self._root, value)
         self._relative_to = value
-        trace("root", repr(self._absolute_root))
-        trace("relative_to", repr(value))
+        trace("set relative_to", root=self._absolute_root, relative_to=value)
 
     @property
     def root(self):
@@ -115,8 +114,7 @@ class Configuration(object):
     def root(self, value):
         self._absolute_root = _check_absolute_root(value, self._relative_to)
         self._root = value
-        trace("root", repr(self._absolute_root))
-        trace("relative_to", repr(self._relative_to))
+        trace("set root", root=self._absolute_root, relative_to=self._relative_to)
 
     @property
     def tag_regex(self):
@@ -137,4 +135,5 @@ class Configuration(object):
         with open(name) as strm:
             defn = __import__("toml").load(strm)
         section = defn.get("tool", {})["setuptools_scm"]
+        trace("configfile input", **section)
         return cls(**section, dist_name=dist_name)

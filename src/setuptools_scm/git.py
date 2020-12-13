@@ -42,7 +42,7 @@ class GitWorkdir(object):
     def get_branch(self):
         branch, err, ret = self.do_ex("git rev-parse --abbrev-ref HEAD")
         if ret:
-            trace("branch err", branch, err, ret)
+            trace("get branch err", branc=branch, err=err, ret=ret)
             return
         return branch
 

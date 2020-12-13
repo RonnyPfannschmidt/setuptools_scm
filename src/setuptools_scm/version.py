@@ -100,7 +100,7 @@ def tag_to_version(tag, config=None):
 
     if VERSION_CLASS is not None:
         version = pkg_parse_version(version)
-        trace("version", repr(version))
+        trace("version", version)
 
     return version
 
@@ -208,7 +208,7 @@ def meta(
             " will use defaults where required."
         )
     parsed_version = _parse_tag(tag, preformatted, config)
-    trace("version", tag, "->", parsed_version)
+    trace("version", tag=tag, parsed=parsed_version)
     assert parsed_version is not None, "Can't parse version %s" % tag
     return ScmVersion(
         parsed_version, distance, node, dirty, preformatted, branch, config, **kw

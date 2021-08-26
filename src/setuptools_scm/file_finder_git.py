@@ -5,6 +5,7 @@ import tarfile
 
 from .file_finder import is_toplevel_acceptable
 from .file_finder import scm_find_files
+from .utils import do_ex
 from .utils import trace
 
 log = logging.getLogger(__name__)
@@ -13,13 +14,12 @@ log = logging.getLogger(__name__)
 def _git_toplevel(path):
     try:
         cwd = os.path.abspath(path or ".")
-        with open(os.devnull, "wb") as devnull:
-            out = subprocess.check_output(
-                ["git", "rev-parse", "--show-prefix"],
-                cwd=cwd,
-                universal_newlines=True,
-                stderr=devnull,
-            )
+        out, err, ret = do_ex(
+            ["git", "rev-parse", "--show-prefix", "HEAD"],
+            cwd=cwd,
+        )
+        if ret != 0:
+            return None
         out = out.strip()[:-1]  # remove the trailing pathsep
         if not out:
             out = cwd
@@ -59,8 +59,11 @@ def _git_interpret_archive(fd, toplevel):
 def _git_ls_files_and_dirs(toplevel):
     # use git archive instead of git ls-file to honor
     # export-ignore git attribute
+
     cmd = ["git", "archive", "--prefix", toplevel + os.path.sep, "HEAD"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=toplevel)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, cwd=toplevel, stderr=subprocess.DEVNULL
+    )
     try:
         try:
             return _git_interpret_archive(proc.stdout, toplevel)

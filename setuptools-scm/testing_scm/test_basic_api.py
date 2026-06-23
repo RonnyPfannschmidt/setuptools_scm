@@ -53,11 +53,11 @@ def assert_root(monkeypatch: pytest.MonkeyPatch, expected_root: str) -> None:
     Patch _resolve_version to simply assert that root is expected root
     """
 
-    def assertion(config: Configuration) -> ScmVersion:
+    def assertion(config: Configuration) -> tuple[ScmVersion, None]:
         assert config.absolute_root == expected_root
         from packaging.version import Version
 
-        return ScmVersion(Version("1.0"), config=config)
+        return ScmVersion(Version("1.0"), config=config), None
 
     import vcs_versioning._get_version_impl
 

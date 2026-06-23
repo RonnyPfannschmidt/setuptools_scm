@@ -10,6 +10,7 @@ from typing import Any, NoReturn
 
 from . import _config
 from . import _types as _t
+from ._backends._scm_workdir import ScmWorkdir
 from ._config import Configuration, TagConfiguration
 from ._environment import resolve_runtime_env
 
@@ -37,7 +38,7 @@ def parse_version(config: Configuration) -> ScmVersion | None:
     the name importable so that older setuptools-scm pins still work with
     newer vcs-versioning releases.
     """
-    scm_version = _resolve_version(config)
+    scm_version, _workdir = _resolve_version(config)
     return _apply_metadata_overrides(scm_version, config)
 
 
@@ -46,35 +47,42 @@ def _finalize(
     config: Configuration,
     *,
     force_write: bool,
+    workdir: ScmWorkdir | None = None,
 ) -> str:
     """Apply metadata overrides, format, and optionally write version files."""
     applied = _apply_metadata_overrides(scm_version, config)
     assert applied is not None
     version_string = _format_version(applied)
     if force_write:
-        write_version_files(config, version=version_string, scm_version=applied)
+        write_version_files(
+            config, version=version_string, scm_version=applied, workdir=workdir
+        )
     return version_string
 
 
-def _resolve_version(config: Configuration) -> ScmVersion | None:
+def _resolve_version(
+    config: Configuration,
+) -> tuple[ScmVersion | None, ScmWorkdir | None]:
     """Run the version pipeline: pretend -> discovery -> legacy EPs.
 
     Discovery handles ``config.parse`` via ``LegacyParseWorkdir`` (deprecated).
 
-    Returns the raw ``ScmVersion`` (before metadata overrides are applied) or
-    ``None`` when no version could be determined.
+    Returns the raw ``ScmVersion`` (before metadata overrides are applied) and
+    the discovered workdir (if any).
     """
     from ._worktree_discovery import discover_workdir
 
     pretended = _read_pretended_version_for(config)
     if pretended is not None:
-        return pretended
+        return pretended, None
 
     workdir = discover_workdir(config)
     if workdir is not None:
         scm_version = workdir.get_scm_version()
         if scm_version is not None:
-            return scm_version
+            if isinstance(workdir, ScmWorkdir):
+                return scm_version, workdir
+            return scm_version, None
 
     from ._legacy_parse import (
         has_legacy_parse_eps,
@@ -85,39 +93,45 @@ def _resolve_version(config: Configuration) -> ScmVersion | None:
     if has_legacy_parse_eps():
         scm_version = parse_scm_version(config) or parse_fallback_version(config)
         if scm_version is not None:
-            return scm_version
+            return scm_version, None
 
-    return None
+    return None, None
 
 
-def _warn_if_tracked(target: Path, root: Path, config: Configuration) -> None:
+def _warn_if_tracked(
+    target: Path,
+    root: Path,
+    config: Configuration,
+    workdir: ScmWorkdir | None = None,
+) -> None:
     """Warn when *target* is tracked in version control (#468).
 
     Writing a version file that is tracked makes ``git describe --dirty``
     report a dirty tree on tag checkouts, causing wrong version numbers.
     """
-    from ._backends._git import GitWorkdir
-    from ._backends._hg import HgWorkdir
+    if workdir is None:
+        from ._worktree_discovery import discover_workdir
 
-    for workdir_cls in (GitWorkdir, HgWorkdir):
-        try:
-            wd = workdir_cls.from_potential_worktree(root, config)
-        except Exception:
-            continue
-        if wd is not None and wd.is_file_tracked(target):
-            warnings.warn(
-                f"version file {target.relative_to(root)} is tracked by"
-                " version control. This will cause dirty-state version bumps"
-                " when the file is rewritten during builds."
-                " Remove it from version control and add it to your VCS ignore file."
-                " See https://github.com/pypa/setuptools-scm/issues/468",
-                stacklevel=3,
-            )
-            return
+        discovered = discover_workdir(config)
+        if isinstance(discovered, ScmWorkdir):
+            workdir = discovered
+
+    if workdir is not None and workdir.is_file_tracked(target):
+        warnings.warn(
+            f"version file {target.relative_to(root)} is tracked by"
+            " version control. This will cause dirty-state version bumps"
+            " when the file is rewritten during builds."
+            " Remove it from version control and add it to your VCS ignore file."
+            " See https://github.com/pypa/setuptools-scm/issues/468",
+            stacklevel=3,
+        )
 
 
 def write_version_files(
-    config: Configuration, version: str, scm_version: ScmVersion
+    config: Configuration,
+    version: str,
+    scm_version: ScmVersion,
+    workdir: ScmWorkdir | None = None,
 ) -> None:
     root = Path(config.absolute_root)
     if config.write_to is not None:
@@ -125,7 +139,7 @@ def write_version_files(
 
         write_to = Path(config.write_to)
         target = root / write_to if not write_to.is_absolute() else write_to
-        _warn_if_tracked(target, root, config)
+        _warn_if_tracked(target, root, config, workdir)
 
         dump_version(
             root=config.root,
@@ -142,7 +156,7 @@ def write_version_files(
         # todo: use a better name than fallback root
         assert config.relative_to is not None
         target = Path(config.relative_to).parent.joinpath(version_file)
-        _warn_if_tracked(target, root, config)
+        _warn_if_tracked(target, root, config, workdir)
 
         write_version_to_path(
             target,
@@ -155,7 +169,7 @@ def write_version_files(
 def _get_version(
     config: Configuration, force_write_version_files: bool | None = None
 ) -> str | None:
-    scm_version = _resolve_version(config)
+    scm_version, workdir = _resolve_version(config)
     if scm_version is None:
         return None
 
@@ -168,7 +182,9 @@ def _get_version(
             stacklevel=2,
         )
 
-    return _finalize(scm_version, config, force_write=force_write_version_files)
+    return _finalize(
+        scm_version, config, force_write=force_write_version_files, workdir=workdir
+    )
 
 
 def _find_scm_in_parents(config: Configuration) -> Path | None:

@@ -123,7 +123,15 @@ def infer_version_with_config(
 
     if _should_write_to_source(config):
         try:
-            write_version_files(config, version=version_string, scm_version=scm_version)
+            from vcs_versioning._backends._scm_workdir import ScmWorkdir as _ScmWorkdir
+
+            scm_wd = workdir if isinstance(workdir, _ScmWorkdir) else None
+            write_version_files(
+                config,
+                version=version_string,
+                scm_version=scm_version,
+                workdir=scm_wd,
+            )
         except OSError as e:
             log.warning(
                 "Could not write version file to source tree: %s. "

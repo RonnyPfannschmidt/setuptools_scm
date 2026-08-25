@@ -8,9 +8,10 @@ import os
 import re
 import warnings
 from collections.abc import Mapping
+from enum import Enum
 from pathlib import Path
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 if TYPE_CHECKING:
     from ._backends import _git
@@ -105,11 +106,96 @@ def _check_tag_regex(value: str | Pattern[str] | None) -> Pattern[str]:
     return regex
 
 
-def _get_default_git_pre_parse() -> _git.GitPreParse:
-    """Get the default git pre_parse enum value"""
-    from ._backends import _git
+class OnAction(Enum):
+    """What to do when the repository is not in the shape we need."""
 
-    return _git.GitPreParse.WARN_ON_SHALLOW
+    IGNORE = "ignore"
+    WARN = "warn"
+    FAIL = "fail"
+    FETCH = "fetch"
+    """only meaningful for ``on.shallow``"""
+
+
+@dataclasses.dataclass
+class OnConfiguration:
+    """What to do when the repository is not in the shape we need.
+
+    Each condition is answered with an action, so any combination is
+    expressible -- unlike the single ``scm.git.pre_parse`` hook it replaces.
+
+    ``shallow`` and ``missing_submodules`` are git-only and are ignored by the
+    other backends.
+    """
+
+    missing_tag: OnAction = OnAction.WARN
+    """no VCS tag matched, so the version was invented from ``0.0``"""
+
+    shallow: OnAction = OnAction.WARN
+    """the clone is shallow *and* that is why no tag was found
+
+    A shallow clone that still reaches a matching tag produces a correct
+    version and is never reported.
+    """
+
+    missing_submodules: OnAction = OnAction.IGNORE
+    """submodules are declared but not initialized"""
+
+    explicit: frozenset[str] = dataclasses.field(
+        default=frozenset(), repr=False, compare=False
+    )
+    """fields that were named in the configuration data, for conflict reporting"""
+
+    ALLOWED: ClassVar[dict[str, frozenset[OnAction]]] = {
+        "missing_tag": frozenset({OnAction.IGNORE, OnAction.WARN, OnAction.FAIL}),
+        "shallow": frozenset(
+            {OnAction.IGNORE, OnAction.WARN, OnAction.FAIL, OnAction.FETCH}
+        ),
+        "missing_submodules": frozenset(
+            {OnAction.IGNORE, OnAction.WARN, OnAction.FAIL}
+        ),
+    }
+
+    @classmethod
+    def from_data(cls, data: dict[str, Any] | None) -> OnConfiguration:
+        """Create OnConfiguration from configuration data, converting strings."""
+        if not data:
+            return cls()
+        on_data = data.copy()
+        unknown = sorted(set(on_data) - set(cls.ALLOWED))
+        if unknown:
+            raise ValueError(
+                f"Unknown on.* condition(s): {', '.join(unknown)}. "
+                f"Valid conditions are: {', '.join(sorted(cls.ALLOWED))}"
+            )
+        for condition, value in list(on_data.items()):
+            if isinstance(value, str):
+                try:
+                    on_data[condition] = OnAction(value)
+                except ValueError as e:
+                    allowed = sorted(a.value for a in cls.ALLOWED[condition])
+                    raise ValueError(
+                        f"Invalid action {value!r} for on.{condition}. "
+                        f"Valid actions are: {', '.join(allowed)}"
+                    ) from e
+            if on_data[condition] not in cls.ALLOWED[condition]:
+                allowed = sorted(a.value for a in cls.ALLOWED[condition])
+                raise ValueError(
+                    f"Invalid action {on_data[condition].value!r} for "
+                    f"on.{condition}. Valid actions are: {', '.join(allowed)}"
+                )
+        return cls(explicit=frozenset(on_data), **on_data)
+
+    def explicitly_set(self) -> frozenset[str]:
+        """Conditions the user chose, whether via data or direct construction."""
+        defaults = {
+            "missing_tag": OnAction.WARN,
+            "shallow": OnAction.WARN,
+            "missing_submodules": OnAction.IGNORE,
+        }
+        differing = {
+            name for name, default in defaults.items() if getattr(self, name) != default
+        }
+        return self.explicit | frozenset(differing)
 
 
 class ParseFunction(Protocol):
@@ -122,9 +208,13 @@ class ParseFunction(Protocol):
 class GitConfiguration:
     """Git-specific configuration options"""
 
-    pre_parse: _git.GitPreParse = dataclasses.field(
-        default_factory=lambda: _get_default_git_pre_parse()
-    )
+    pre_parse: _git.GitPreParse | None = None
+    """deprecated -- use the ``on.*`` conditions instead
+
+    ``None`` means "not configured"; the ``on.*`` settings decide.  A non-None
+    value is migrated onto ``on.*`` by :meth:`Configuration.__post_init__`.
+    """
+
     describe_command: _t.CMD_TYPE | None = None
 
     @classmethod
@@ -301,6 +391,7 @@ class Configuration:
     scm: ScmConfiguration = dataclasses.field(
         default_factory=lambda: ScmConfiguration()
     )
+    on: OnConfiguration = dataclasses.field(default_factory=lambda: OnConfiguration())
 
     _env: VcsEnvironment | None = dataclasses.field(
         default=None, repr=False, compare=False
@@ -385,6 +476,52 @@ class Configuration:
                         "'scm.git.describe_command'. Please use only 'scm.git.describe_command'."
                     )
                 self.scm.git.describe_command = git_describe_command
+
+        self._migrate_pre_parse()
+
+    def _migrate_pre_parse(self) -> None:
+        """Fold the deprecated ``scm.git.pre_parse`` hook onto ``on.*``.
+
+        The mapping must reproduce the old behaviour exactly, including the
+        fact that ``fail_on_missing_submodules`` used to *replace* the default
+        shallow warning rather than add to it.
+        """
+        pre_parse = self.scm.git.pre_parse
+        if pre_parse is None:
+            return
+
+        from ._backends._git import GitPreParse
+
+        migration: dict[GitPreParse, dict[str, OnAction]] = {
+            GitPreParse.WARN_ON_SHALLOW: {"shallow": OnAction.WARN},
+            GitPreParse.FAIL_ON_SHALLOW: {"shallow": OnAction.FAIL},
+            GitPreParse.FETCH_ON_SHALLOW: {"shallow": OnAction.FETCH},
+            GitPreParse.FAIL_ON_MISSING_SUBMODULES: {
+                "shallow": OnAction.IGNORE,
+                "missing_submodules": OnAction.FAIL,
+            },
+        }
+        actions = migration[pre_parse]
+
+        conflicts = sorted(self.on.explicitly_set() & set(actions))
+        if conflicts:
+            raise ValueError(
+                f"Cannot specify both 'scm.git.pre_parse' (deprecated) and "
+                f"{', '.join(f'on.{name}' for name in conflicts)}. "
+                f"Please use only the on.* settings."
+            )
+
+        warnings.warn(
+            "Configuration key 'scm.git.pre_parse' is deprecated. Use "
+            + ", ".join(
+                f"on.{name} = {action.value!r}" for name, action in actions.items()
+            )
+            + " instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        for name, action in actions.items():
+            setattr(self.on, name, action)
 
     @property
     def absolute_root(self) -> str:
@@ -506,11 +643,13 @@ class Configuration:
         tag_config = TagConfiguration.from_data(tag_data if tag_data else None)
         scm_data = data.pop("scm", {})
         scm_config = ScmConfiguration.from_data(scm_data)
+        on_config = OnConfiguration.from_data(data.pop("on", None))
         return cls(
             relative_to=relative_to,
             version_cls=version_cls,
             tag=tag_config,
             scm=scm_config,
+            on=on_config,
             _env=_env,
             **data,
         )

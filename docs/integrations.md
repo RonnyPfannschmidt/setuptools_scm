@@ -52,9 +52,9 @@ This ensures a clean Git working directory before setuptools-scm detects the ver
 Reference: [ReadTheDocs Build Customization - Avoid having a dirty Git index](https://docs.readthedocs.com/platform/stable/build-customization.html#avoid-having-a-dirty-git-index)
 
 
-### Enforce fail on shallow repositories
+### Enforce fail on a missing tag
 
-ReadTheDocs may sometimes use shallow Git clones that lack the full history needed for proper version detection. You can use setuptools-scm's environment variable override system to enforce `fail_on_shallow` when building on ReadTheDocs:
+ReadTheDocs may sometimes use shallow Git clones that lack the full history needed for proper version detection. You can use setuptools-scm's environment variable override system to turn that into a hard failure when building on ReadTheDocs:
 
 ```yaml title=".readthedocs.yaml"
 version: 2
@@ -67,11 +67,13 @@ build:
       # Avoid setuptools-scm dirty Git index issues
       - git reset --hard HEAD
       - git clean -fdx
-      # Enforce fail_on_shallow for setuptools-scm
-      - export SETUPTOOLS_SCM_OVERRIDES_FOR_${READTHEDOCS_PROJECT//-/_}='{scm.git.pre_parse="fail_on_shallow"}'
+      # Fail loudly instead of inventing a version
+      - export SETUPTOOLS_SCM_OVERRIDES_FOR_${READTHEDOCS_PROJECT//-/_}='{on.shallow="fail",on.missing_tag="fail"}'
 ```
 
-This configuration uses the `SETUPTOOLS_SCM_OVERRIDES_FOR_${DIST_NAME}` environment variable to override the `scm.git.pre_parse` setting specifically for your project when building on ReadTheDocs, forcing setuptools-scm to fail with a clear error if the repository is shallow.
+This configuration uses the `SETUPTOOLS_SCM_OVERRIDES_FOR_${DIST_NAME}` environment variable to override the [`on.*` settings](config.md) specifically for your project when building on ReadTheDocs, so the build fails with a clear error instead of silently producing a made-up version.
+
+`on.shallow` reports the shallow case with the actionable `git fetch --unshallow` advice; `on.missing_tag` catches the case a shallow check cannot see -- a complete clone that simply has no tags. Both are needed, and before the `on.*` settings existed the single `scm.git.pre_parse` string could only express one of them.
 
 ## CI/CD and Package Publishing
 

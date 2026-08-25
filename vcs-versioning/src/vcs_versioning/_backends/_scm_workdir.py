@@ -130,6 +130,50 @@ def version_outcome(config: Configuration, tag: str | None, **meta_kw: Any) -> s
     return f"{version} (from tag {tag!r})"
 
 
+MISSING_TAG_DIAGNOSTIC = (
+    "no version tag found in %s, so the version was invented from 0.0 -- it"
+    " does not correspond to any release.\n"
+    "  %s\n"
+    "Set fallback_version to pick the version explicitly, or"
+    ' on.missing_tag = "ignore" in %s to silence this.'
+)
+
+NO_TAGS_HINT = 'Tag a release, or fetch the tags with "git fetch --tags".'
+
+
+def unmatched_tags_hint(match: str) -> str:
+    """Hint for a repository that *has* tags, none of which matched."""
+    return (
+        f"The repository has tags, but none match {match!r} --"
+        " check tag.prefix and tag.strict."
+    )
+
+
+def report_missing_tag(
+    config: Configuration, path: object, hint: str | None = None
+) -> None:
+    """Apply ``on.missing_tag`` after a tag lookup came up empty.
+
+    Called by each backend right before it invents a tag.  Backends that can
+    diagnose the cause more precisely -- git and a shallow clone -- report that
+    instead and never reach here.
+    """
+    from .._config import OnAction
+
+    if config.fallback_version is not None:
+        # an explicit opt-in to "no tag is fine"
+        return
+
+    action = config.on.missing_tag
+    if action is OnAction.IGNORE:
+        return
+
+    args = (path, hint or NO_TAGS_HINT, config_location(config))
+    if action is OnAction.FAIL:
+        raise ValueError(MISSING_TAG_DIAGNOSTIC % args)
+    report_once(f"missing-tag:{path}", MISSING_TAG_DIAGNOSTIC, *args)
+
+
 STRICT_DIAGNOSTIC = (
     "tag.strict is not set, and the future default changes this"
     " repository's version:\n"

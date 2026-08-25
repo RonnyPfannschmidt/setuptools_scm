@@ -99,6 +99,24 @@ SCM results always take priority over fallback results.
 Configures how the version number is constructed given a
 [ScmVersion][vcs_versioning.ScmVersion] instance and should return a string
 representing the version.
+
+!!! tip "Detecting an invented tag"
+
+    When no version tag matched, the backends invent a `0.0` tag so that a
+    version can still be produced. `ScmVersion.tag_found` is `False` in that
+    case, so a scheme can refuse to build rather than emit a version that
+    corresponds to no release:
+
+    ```python
+    def release_only(version):
+        if not version.tag_found:
+            raise RuntimeError("refusing to build without a release tag")
+        return version.format_with("{tag}")
+    ```
+
+    For most projects the [`on.missing_tag`](config.md) setting is the simpler
+    way to get the same effect without writing a scheme.
+
 ### Available implementations
 
 `guess-next-dev (default)`

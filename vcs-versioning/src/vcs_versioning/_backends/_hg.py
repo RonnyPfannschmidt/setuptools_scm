@@ -22,6 +22,7 @@ from ._scm_workdir import (
     Workdir,
     config_location,
     get_latest_file_mtime,
+    report_missing_tag,
     report_once,
 )
 
@@ -284,12 +285,14 @@ class HgWorkdir(Workdir):
     ) -> ScmVersion:
         """Create metadata for initial/empty repository."""
         log.debug("initial node %s", self.path)
+        report_missing_tag(config, self.path)
         return meta(
             Version("0.0"),
             config=config,
             dirty=dirty,
             branch=branch,
             node_date=node_date,
+            tag_found=False,
         )
 
     def _parse_tags(self, tags_str: str) -> list[str]:
@@ -325,19 +328,30 @@ class HgWorkdir(Workdir):
             else:
                 dist = self.get_distance_revs(tag_str)
 
+            tag_found = True
             if tag_str == "null" or tag_str is None:
                 tag = Version("0.0")
                 dist += 1
+                tag_found = False
             else:
                 maybe_tag = tag_to_version(tag_str, config=config)
                 if maybe_tag is None:
                     # If tag conversion fails, treat as no tag found
                     tag = Version("0.0")
                     dist += 1
+                    tag_found = False
                 else:
                     tag = maybe_tag
 
-            if self.check_changes_since_tag(tag_str) or dirty:
+            if not tag_found:
+                report_missing_tag(config, self.path)
+                # a fabricated tag: nothing to measure changes against
+                changed = True
+            else:
+                assert tag_str is not None
+                changed = self.check_changes_since_tag(tag_str)
+
+            if changed or dirty:
                 return meta(
                     tag,
                     distance=dist,
@@ -346,6 +360,7 @@ class HgWorkdir(Workdir):
                     branch=branch,
                     config=config,
                     node_date=node_date,
+                    tag_found=tag_found,
                 )
             else:
                 return meta(tag, config=config, node_date=node_date)
@@ -385,10 +400,14 @@ class HgWorkdir(Workdir):
         out = self.hg_log(revset, ".")
         return len(out) - 1
 
-    def check_changes_since_tag(self, tag: str | None) -> bool:
-        if tag == "0.0" or tag is None:
-            return True
+    def check_changes_since_tag(self, tag: str) -> bool:
+        """Whether anything landed on this branch since *tag*.
 
+        Callers must not reach this with a fabricated tag -- ``tag_found`` is
+        the authoritative "no tag" signal, so the old ``tag == "0.0"``
+        heuristic (which also misfired on a real tag literally named ``0.0``)
+        is gone.
+        """
         revset = (
             "(branch(.)"  # look for revisions in this branch only
             f" and tag({tag!r})::."  # after the last tag
@@ -494,7 +513,9 @@ def archival_to_version(data: dict[str, str], config: Configuration) -> ScmVersi
             config=config,
         )
     else:
-        return meta(config.version_cls("0.0"), node=node, config=config)
+        return meta(
+            config.version_cls("0.0"), node=node, config=config, tag_found=False
+        )
 
 
 def parse_archival(root: _t.PathT, config: Configuration) -> ScmVersion:

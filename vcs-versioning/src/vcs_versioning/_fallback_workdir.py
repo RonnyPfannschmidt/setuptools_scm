@@ -101,6 +101,7 @@ class MetadataWorkdir(FallbackWorkdir):
             branch=data.branch,
             config=self.config,
             node_date=node_date,
+            tag_found=data.tag_found,
         )
 
     def list_tracked_files(self, path: Path | str = "") -> list[str]:

@@ -249,6 +249,28 @@ strict = true      # require tags to contain at least one dot
     initialized. Useful to prevent packaging incomplete projects when
     submodules are required for a complete build.
 
+!!! tip "On an older release?"
+
+    Before the `on.*` settings existed there was no supported way to catch a
+    tagless repository. The portable stand-in is a pre-build check in CI,
+    which needs no setuptools-scm at all:
+
+    ```sh
+    # mirrors the default --match glob; prepend your tag.prefix if you set one
+    git describe --dirty --tags --long --match '*[0-9]*' >/dev/null 2>&1 || {
+        echo "no version tag reachable -- setuptools-scm would invent one" >&2
+        [ "$(git rev-parse --is-shallow-repository)" = true ] \
+            && echo 'the clone is shallow; run "git fetch --unshallow"' >&2 \
+            || echo 'run "git fetch --tags", or tag a release' >&2
+        exit 1
+    }
+    ```
+
+    Inspecting `version.tag` from a custom `version_scheme` also works, but
+    only via the Python API, and testing `str(version.tag) == "0.0"` cannot
+    tell an invented tag from a project that genuinely tagged `0.0`. If you go
+    that route, ask git rather than comparing the tag value.
+
 `scm.git.pre_parse` (deprecated)
 :   **Deprecated**: use the `on.*` settings above.
 

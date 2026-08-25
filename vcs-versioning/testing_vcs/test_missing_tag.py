@@ -8,19 +8,20 @@ looked at shallowness.
 from __future__ import annotations
 
 import logging
-
 from pathlib import Path
 
 import pytest
-
 from vcs_versioning import Configuration
 from vcs_versioning._backends import _git as git
-from vcs_versioning._config import GitConfiguration
-from vcs_versioning._config import OnAction
-from vcs_versioning._config import OnConfiguration
-from vcs_versioning._config import ScmConfiguration
-from vcs_versioning._config import TagConfiguration
+from vcs_versioning._config import (
+    GitConfiguration,
+    OnAction,
+    OnConfiguration,
+    ScmConfiguration,
+    TagConfiguration,
+)
 from vcs_versioning._run_cmd import run
+from vcs_versioning._scm_version import ScmVersion
 from vcs_versioning.test_api import DebugMode, WorkDir
 
 pytestmark = pytest.mark.issue(1506)
@@ -41,11 +42,20 @@ def tagless_wd(wd: WorkDir) -> WorkDir:
     return wd
 
 
-def on(**kw: OnAction) -> OnConfiguration:
-    return OnConfiguration(**kw)
+def on(
+    *,
+    missing_tag: OnAction = OnAction.WARN,
+    shallow: OnAction = OnAction.WARN,
+    missing_submodules: OnAction = OnAction.IGNORE,
+) -> OnConfiguration:
+    return OnConfiguration(
+        missing_tag=missing_tag,
+        shallow=shallow,
+        missing_submodules=missing_submodules,
+    )
 
 
-def parse(root: object, config: Configuration) -> object:
+def parse(root: object, config: Configuration) -> ScmVersion | None:
     return git.parse(str(root), config)
 
 
@@ -93,9 +103,7 @@ def test_fallback_version_opts_out(
     tagless_wd: WorkDir, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Setting fallback_version is an explicit "no tag is fine"."""
-    config = Configuration(
-        fallback_version="1.2.3", on=on(missing_tag=OnAction.FAIL)
-    )
+    config = Configuration(fallback_version="1.2.3", on=on(missing_tag=OnAction.FAIL))
     with caplog.at_level(logging.WARNING):
         assert parse(tagless_wd.cwd, config) is not None
     assert "no version tag found" not in caplog.text
@@ -204,18 +212,14 @@ def test_shallow_with_reachable_tag_is_silent(
 def test_shallow_ignore_falls_through_to_missing_tag(
     shallow_tagless_wd: Path,
 ) -> None:
-    config = Configuration(
-        on=on(shallow=OnAction.IGNORE, missing_tag=OnAction.FAIL)
-    )
+    config = Configuration(on=on(shallow=OnAction.IGNORE, missing_tag=OnAction.FAIL))
     with pytest.raises(ValueError, match="no version tag found"):
         parse(shallow_tagless_wd, config)
 
 
 def test_shallow_and_missing_tag_can_both_be_set(shallow_tagless_wd: Path) -> None:
     """The combination a single ``pre_parse`` string could never express."""
-    config = Configuration(
-        on=on(shallow=OnAction.FAIL, missing_tag=OnAction.FAIL)
-    )
+    config = Configuration(on=on(shallow=OnAction.FAIL, missing_tag=OnAction.FAIL))
     with pytest.raises(ValueError, match="git fetch --unshallow"):
         parse(shallow_tagless_wd, config)
 
@@ -270,9 +274,28 @@ def test_tag_found_true_with_tag(wd: WorkDir) -> None:
     assert version.tag_found is True
 
 
+def test_tag_found_true_for_a_genuine_0_0_tag(
+    wd: WorkDir, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The case the ``str(version.tag) == "0.0"`` workaround gets wrong.
+
+    A project that really tagged ``0.0`` is indistinguishable from an invented
+    tag by value alone, which is why this needs to be recorded rather than
+    guessed.
+    """
+    wd.commit_testfile()
+    wd.create_tag("0.0")
+    wd.commit_testfile()
+    with caplog.at_level(logging.WARNING):
+        version = parse(wd.cwd, Configuration())
+    assert version is not None
+    assert str(version.tag) == "0.0"
+    assert version.tag_found is True
+    assert "no version tag found" not in caplog.text
+
+
 def test_version_scheme_can_reject_an_invented_tag(tagless_wd: WorkDir) -> None:
     """The borgbackup use case, without sniffing the fallback tag."""
-    from vcs_versioning._scm_version import ScmVersion
 
     def strict_scheme(version: ScmVersion) -> str:
         if not version.tag_found:
@@ -293,9 +316,7 @@ def test_version_scheme_can_reject_an_invented_tag(tagless_wd: WorkDir) -> None:
 def test_on_from_dotted_toml(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
-        '[tool.setuptools_scm]\n'
-        'on.missing_tag = "fail"\n'
-        'on.shallow = "fetch"\n',
+        '[tool.setuptools_scm]\non.missing_tag = "fail"\non.shallow = "fetch"\n',
         encoding="utf-8",
     )
     config = Configuration.from_file(pyproject)

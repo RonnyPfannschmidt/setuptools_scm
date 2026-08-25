@@ -71,9 +71,7 @@ build:
       - export SETUPTOOLS_SCM_OVERRIDES_FOR_${READTHEDOCS_PROJECT//-/_}='{on.shallow="fail",on.missing_tag="fail"}'
 ```
 
-This configuration uses the `SETUPTOOLS_SCM_OVERRIDES_FOR_${DIST_NAME}` environment variable to override the [`on.*` settings](config.md) specifically for your project when building on ReadTheDocs, so the build fails with a clear error instead of silently producing a made-up version.
-
-`on.shallow` reports the shallow case with the actionable `git fetch --unshallow` advice; `on.missing_tag` catches the case a shallow check cannot see -- a complete clone that simply has no tags. Both are needed, and before the `on.*` settings existed the single `scm.git.pre_parse` string could only express one of them.
+`SETUPTOOLS_SCM_OVERRIDES_FOR_${DIST_NAME}` overrides the [`on.*` settings](config.md) for your project only. Both are worth setting: `on.shallow` gives the actionable `git fetch --unshallow` advice, `on.missing_tag` catches what a shallow check cannot see -- a complete clone with no tags.
 
 ## CI/CD and Package Publishing
 

@@ -102,20 +102,15 @@ representing the version.
 
 !!! tip "Detecting an invented tag"
 
-    When no version tag matched, the backends invent a `0.0` tag so that a
-    version can still be produced. `ScmVersion.tag_found` is `False` in that
-    case, so a scheme can refuse to build rather than emit a version that
-    corresponds to no release:
+    `ScmVersion.tag_found` is `False` when no tag matched and the `0.0` tag was
+    invented, so a scheme can refuse to emit a version for no release:
 
     ```python
-    def release_only(version):
-        if not version.tag_found:
-            raise RuntimeError("refusing to build without a release tag")
-        return version.format_with("{tag}")
+    if not version.tag_found:
+        raise RuntimeError("refusing to build without a release tag")
     ```
 
-    For most projects the [`on.missing_tag`](config.md) setting is the simpler
-    way to get the same effect without writing a scheme.
+    [`on.missing_tag`](config.md) does the same without writing a scheme.
 
 ### Available implementations
 

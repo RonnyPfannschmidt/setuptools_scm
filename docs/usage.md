@@ -57,7 +57,6 @@ dynamic = ["version"]
 # Configure custom options here (version schemes, file writing, etc.)
 version_file = "src/mypackage/_version.py"
 
-# Example: what to do when the repository is not in the shape we need
 on.missing_tag = "fail"         # Fail instead of inventing a version from 0.0
 on.missing_submodules = "fail"  # Fail if submodules are not initialized
 

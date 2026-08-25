@@ -212,72 +212,38 @@ strict = true      # require tags to contain at least one dot
         while keeping prefix stripping.
 
 `on.missing_tag: "ignore" | "warn" | "fail" = "warn"`
-:   What to do when no version tag matched, so the version had to be invented
-    from `0.0` and says nothing about what was actually released.
+:   What to do when no version tag matched, so the version was invented from
+    `0.0`. The diagnostic names the likely cause: no tags at all, or tags that
+    exist but do not match `tag.prefix`/`tag.strict`.
+
+    Setting `fallback_version` suppresses it -- an explicit "no tag is fine".
 
     ```toml
     [tool.setuptools_scm]
     on.missing_tag = "fail"
-    ```
-
-    The diagnostic distinguishes the two causes: a repository with no tags at
-    all points you at `git fetch --tags`, while a repository whose tags exist
-    but do not match names the pattern that was used, since that is almost
-    always a `tag.prefix` or `tag.strict` mistake.
-
-    Setting `fallback_version` suppresses this entirely -- that is an explicit
-    "no tag is fine".
-
-`on.shallow: "ignore" | "warn" | "fail" | "fetch" = "warn"` (git only)
-:   What to do when the clone is shallow **and** that is why no tag was found.
-
-    ```toml
-    [tool.setuptools_scm]
     on.shallow = "fetch"
     ```
 
-    A shallow clone that still reaches a matching tag produces a correct
-    version and is never reported -- clone depth on its own is not a problem.
-    `"fetch"` unshallows the checkout and retries, and likewise does nothing
-    when the existing history already reaches a tag.
-
-    When set to `"ignore"`, a shallow tagless repository falls through to
+`on.shallow: "ignore" | "warn" | "fail" | "fetch" = "warn"` (git only)
+:   What to do when the clone is shallow **and** that is why no tag was found.
+    A shallow clone that still reaches a matching tag is never reported, and
+    `"fetch"` will not unshallow it. `"ignore"` falls through to
     `on.missing_tag`.
 
 `on.missing_submodules: "ignore" | "warn" | "fail" = "ignore"` (git only)
-:   What to do when submodules are declared in `.gitmodules` but not
-    initialized. Useful to prevent packaging incomplete projects when
-    submodules are required for a complete build.
+:   What to do when `.gitmodules` declares submodules that are not initialized.
 
-!!! tip "On an older release?"
+!!! tip "On an older release"
 
-    Before the `on.*` settings existed there was no supported way to catch a
-    tagless repository. The portable stand-in is a pre-build check in CI,
-    which needs no setuptools-scm at all:
-
-    ```sh
-    # mirrors the default --match glob; prepend your tag.prefix if you set one
-    git describe --dirty --tags --long --match '*[0-9]*' >/dev/null 2>&1 || {
-        echo "no version tag reachable -- setuptools-scm would invent one" >&2
-        [ "$(git rev-parse --is-shallow-repository)" = true ] \
-            && echo 'the clone is shallow; run "git fetch --unshallow"' >&2 \
-            || echo 'run "git fetch --tags", or tag a release' >&2
-        exit 1
-    }
-    ```
-
-    Inspecting `version.tag` from a custom `version_scheme` also works, but
-    only via the Python API, and testing `str(version.tag) == "0.0"` cannot
-    tell an invented tag from a project that genuinely tagged `0.0`. If you go
-    that route, ask git rather than comparing the tag value.
+    Nothing there catches a tagless repository; check before the build instead
+    -- `git describe --tags --match '*[0-9]*'` (prefix the glob with your
+    `tag.prefix`). Reading `version.tag` from a `version_scheme` also works,
+    but `str(version.tag) == "0.0"` cannot tell an invented tag from a project
+    that genuinely tagged `0.0`.
 
 `scm.git.pre_parse` (deprecated)
-:   **Deprecated**: use the `on.*` settings above.
-
-    A single string naming one git pre-parse hook. Because it held only one
-    value, `fail_on_shallow` and a missing-tag check could never be combined,
-    and `fail_on_missing_submodules` silently replaced the default shallow
-    warning rather than adding to it. It maps onto `on.*` as:
+:   **Deprecated**: use the `on.*` settings. One string could only ever carry
+    one condition. Existing values map as:
 
     | `scm.git.pre_parse` | `on.shallow` | `on.missing_submodules` |
     |---|---|---|
@@ -286,11 +252,8 @@ strict = true      # require tags to contain at least one dot
     | `"fetch_on_shallow"` | `"fetch"` | `"ignore"` |
     | `"fail_on_missing_submodules"` | `"ignore"` | `"fail"` |
 
-    Setting both `scm.git.pre_parse` and a conflicting `on.*` key is an error.
-
-    Note: all of this is overridden by an explicit `pre_parse` callable passed
-    to the git parse function, which remains the escape hatch for third
-    parties.
+    Setting both this and a conflicting `on.*` key is an error. An explicit
+    `pre_parse` callable passed to the git parse function still wins over both.
 
 `git_describe_command` (deprecated)
 :   **Deprecated since 8.4.0**: Use `scm.git.describe_command` instead.

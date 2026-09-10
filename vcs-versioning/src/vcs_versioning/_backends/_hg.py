@@ -403,10 +403,8 @@ class HgWorkdir(Workdir):
     def check_changes_since_tag(self, tag: str) -> bool:
         """Whether anything landed on this branch since *tag*.
 
-        Callers must not reach this with a fabricated tag -- ``tag_found`` is
-        the authoritative "no tag" signal, so the old ``tag == "0.0"``
-        heuristic (which also misfired on a real tag literally named ``0.0``)
-        is gone.
+        Callers must not reach this with a fabricated tag; ``tag_found`` is
+        the authoritative "no tag" signal.
         """
         revset = (
             "(branch(.)"  # look for revisions in this branch only

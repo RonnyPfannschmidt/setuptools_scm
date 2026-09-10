@@ -138,7 +138,7 @@ MISSING_TAG_DIAGNOSTIC = (
     ' on.missing_tag = "ignore" in %s to silence this.'
 )
 
-NO_TAGS_HINT = 'Tag a release, or fetch the tags with "git fetch --tags".'
+NO_TAGS_HINT = 'Tag a release, or fetch tags with "git fetch --tags".'
 
 
 def unmatched_tags_hint(match: str) -> str:

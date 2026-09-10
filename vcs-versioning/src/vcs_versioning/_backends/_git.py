@@ -213,10 +213,9 @@ class GitWorkdir(Workdir):
     def is_shallow(self) -> bool:
         """Whether the checkout has truncated history.
 
-        Asks git rather than looking for ``.git/shallow``: in a worktree or a
-        submodule ``.git`` is a *file* pointing elsewhere, so the path check
-        answered ``False`` for shallow clones there (and the shallow
-        diagnostics never fired).
+        Asks git rather than looking for ``.git/shallow``: that path is not
+        reachable in a worktree or submodule, where ``.git`` is a *file*
+        pointing elsewhere.
         """
         res = self.run_git(["rev-parse", "--is-shallow-repository"])
         return res.stdout.strip() == "true"
@@ -224,9 +223,9 @@ class GitWorkdir(Workdir):
     def head_is_exact_tag(self) -> bool:
         """True when HEAD points exactly at a tag (including lightweight tags).
 
-        Kept for third-party callers; the shallow diagnostics no longer use it
-        -- a successful ``git describe`` is the stronger signal, since it also
-        covers a tag reachable further back in a deep-enough shallow clone.
+        Provided for third-party callers.  The shallow diagnostics instead key
+        off a successful ``git describe``, which also accepts a tag reachable
+        further back in a deep-enough shallow clone.
         """
         res = self.run_git(
             ["describe", "--exact-match", "--tags", "HEAD"],

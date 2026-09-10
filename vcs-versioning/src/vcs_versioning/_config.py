@@ -482,9 +482,9 @@ class Configuration:
     def _migrate_pre_parse(self) -> None:
         """Fold the deprecated ``scm.git.pre_parse`` hook onto ``on.*``.
 
-        The mapping must reproduce the old behaviour exactly, including the
-        fact that ``fail_on_missing_submodules`` used to *replace* the default
-        shallow warning rather than add to it.
+        Each hook maps to the full set of actions it selects, so
+        ``fail_on_missing_submodules`` also sets ``on.shallow = "ignore"``: it
+        replaces the default shallow warning rather than adding to it.
         """
         pre_parse = self.scm.git.pre_parse
         if pre_parse is None:

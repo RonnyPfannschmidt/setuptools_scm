@@ -29,7 +29,9 @@ from ._scm_workdir import (
     Workdir,
     config_location,
     get_latest_file_mtime,
+    report_missing_tag,
     report_once,
+    unmatched_tags_hint,
     version_outcome,
 )
 
@@ -209,14 +211,35 @@ class GitWorkdir(Workdir):
             return None
 
     def is_shallow(self) -> bool:
-        return self.path.joinpath(".git/shallow").is_file()
+        """Whether the checkout has truncated history.
+
+        Asks git rather than looking for ``.git/shallow``: that path is not
+        reachable in a worktree or submodule, where ``.git`` is a *file*
+        pointing elsewhere.
+        """
+        res = self.run_git(["rev-parse", "--is-shallow-repository"])
+        return res.stdout.strip() == "true"
 
     def head_is_exact_tag(self) -> bool:
-        """True when HEAD points exactly at a tag (including lightweight tags)."""
+        """True when HEAD points exactly at a tag (including lightweight tags).
+
+        Provided for third-party callers.  The shallow diagnostics instead key
+        off a successful ``git describe``, which also accepts a tag reachable
+        further back in a deep-enough shallow clone.
+        """
         res = self.run_git(
             ["describe", "--exact-match", "--tags", "HEAD"],
         )
         return res.returncode == 0
+
+    def has_any_tags(self) -> bool:
+        """Whether the checkout knows about any tag at all.
+
+        Distinguishes "nothing is tagged yet" from "tags exist but none match
+        the configured pattern", which need different advice.
+        """
+        res = self.run_git(["tag", "-l"])
+        return bool(res.stdout.strip())
 
     def fetch_shallow(self) -> None:
         try:
@@ -249,11 +272,7 @@ class GitWorkdir(Workdir):
 
     def get_scm_version(self) -> ScmVersion | None:
         """Obtain version metadata from this git work directory."""
-        config = self.config
-        effective_pre_parse = _GIT_PRE_PARSE_FUNCTIONS.get(
-            config.scm.git.pre_parse, warn_on_shallow
-        )
-        return _git_parse_inner(config, self, pre_parse=effective_pre_parse)
+        return _git_parse_inner(self.config, self)
 
     def list_tracked_files(self, path: Path | str = "") -> list[str]:
         """List files tracked by git, honoring export-ignore.
@@ -361,15 +380,27 @@ def _warn_if_describe_command_overrides_strict(
     )
 
 
+def shallow_without_tag(wd: GitWorkdir) -> bool:
+    """Whether the clone is shallow *and* that is why no version tag was found.
+
+    A shallow clone that still reaches a matching tag produces a completely
+    correct version, so it is not worth reporting.  This supersedes the older
+    ``head_is_exact_tag()`` guard, which only recognised the distance-0 case
+    (#1241) and still nagged about -- and needlessly unshallowed -- a
+    ``--depth`` clone holding a tag a few commits back.
+    """
+    return wd.is_shallow() and wd.default_describe().returncode != 0
+
+
 def warn_on_shallow(wd: GitWorkdir) -> None:
     """experimental, may change at any time"""
-    if wd.is_shallow() and not wd.head_is_exact_tag():
+    if shallow_without_tag(wd):
         warnings.warn(f'"{wd.path}" is shallow and may cause errors', stacklevel=2)
 
 
 def fetch_on_shallow(wd: GitWorkdir) -> None:
     """experimental, may change at any time"""
-    if wd.is_shallow() and not wd.head_is_exact_tag():
+    if shallow_without_tag(wd):
         warnings.warn(
             f'"{wd.path}" was shallow, git fetch was used to rectify', stacklevel=2
         )
@@ -378,7 +409,7 @@ def fetch_on_shallow(wd: GitWorkdir) -> None:
 
 def fail_on_shallow(wd: GitWorkdir) -> None:
     """experimental, may change at any time"""
-    if wd.is_shallow() and not wd.head_is_exact_tag():
+    if shallow_without_tag(wd):
         raise ValueError(
             f'{wd.path} is shallow, please correct with "git fetch --unshallow"'
         )
@@ -443,6 +474,27 @@ _GIT_PRE_PARSE_FUNCTIONS: dict[GitPreParse, Callable[[GitWorkdir], None]] = {
 }
 
 
+def check_submodules(
+    wd: GitWorkdir | hg_git.GitWorkdirHgClient, config: Configuration
+) -> None:
+    """Apply ``on.missing_submodules``.
+
+    Genuinely a pre-parse check: it has nothing to do with tags, so it runs
+    before ``git describe`` like ``pre_parse`` always did.
+    """
+    from .._config import OnAction
+
+    action = config.on.missing_submodules
+    if action is OnAction.IGNORE:
+        return
+    try:
+        fail_on_missing_submodules(wd)
+    except ValueError as e:
+        if action is OnAction.FAIL:
+            raise
+        report_once(f"missing-submodules:{wd.path}", "%s", e)
+
+
 def get_working_directory(config: Configuration, root: _t.PathT) -> GitWorkdir | None:
     """
     Return the working directory (``GitWorkdir``).
@@ -474,17 +526,10 @@ def parse(
     _require_command("git")
     wd = get_working_directory(config, root)
     if wd:
-        # Use function parameter first, then config setting, then default
-        if pre_parse is not None:
-            effective_pre_parse = pre_parse
-        else:
-            # config.scm.git.pre_parse is always a GitPreParse enum instance
-            effective_pre_parse = _GIT_PRE_PARSE_FUNCTIONS.get(
-                config.scm.git.pre_parse, warn_on_shallow
-            )
-
+        # An explicit callable still wins; otherwise ``config.on.*`` decides
+        # (``scm.git.pre_parse`` has already been folded onto it).
         return _git_parse_inner(
-            config, wd, describe_command=describe_command, pre_parse=effective_pre_parse
+            config, wd, describe_command=describe_command, pre_parse=pre_parse
         )
     else:
         return None
@@ -519,6 +564,60 @@ def version_from_describe(
     return describe_res.parse_success(parse=parse_describe)
 
 
+def _fetch_and_retry_describe(
+    wd: GitWorkdir | hg_git.GitWorkdirHgClient,
+    config: Configuration,
+    describe_command: _t.CMD_TYPE | None,
+) -> ScmVersion | None:
+    """Unshallow and describe again when ``on.shallow = "fetch"``.
+
+    Only reached once describe has already failed, so an already-deep-enough
+    shallow clone never pays for a network round-trip.
+    """
+    from .._config import OnAction
+
+    if config.on.shallow is not OnAction.FETCH or not wd.is_shallow():
+        return None
+    warnings.warn(
+        f'"{wd.path}" was shallow, git fetch was used to rectify', stacklevel=2
+    )
+    wd.fetch_shallow()
+    return version_from_describe(wd, config, describe_command)
+
+
+def _diagnose_missing_tag(
+    wd: GitWorkdir | hg_git.GitWorkdirHgClient,
+    config: Configuration,
+    *,
+    handled_by_pre_parse: bool,
+) -> None:
+    """Report a describe that found nothing, per ``on.shallow`` / ``on.missing_tag``.
+
+    Shallowness is the more specific diagnosis of the same failure, so it wins
+    when it applies and falls through to ``on.missing_tag`` when set to
+    ``ignore``.  Everything here runs only on the already-failed path, so the
+    extra ``git tag -l`` costs nothing in the normal case.
+    """
+    from .._config import OnAction
+
+    if not handled_by_pre_parse and wd.is_shallow():
+        # an explicit pre_parse callable owns the shallow story instead
+        if config.on.shallow is OnAction.FAIL:
+            raise ValueError(
+                f'{wd.path} is shallow, please correct with "git fetch --unshallow"'
+            )
+        if config.on.shallow is OnAction.WARN:
+            warnings.warn(f'"{wd.path}" is shallow and may cause errors', stacklevel=2)
+            return
+
+    hint = (
+        unmatched_tags_hint(config.tag.describe_match_glob())
+        if wd.has_any_tags()
+        else None
+    )
+    report_missing_tag(config, wd.path, hint)
+
+
 def _git_parse_inner(
     config: Configuration,
     wd: GitWorkdir | hg_git.GitWorkdirHgClient,
@@ -527,12 +626,19 @@ def _git_parse_inner(
 ) -> ScmVersion:
     # wd satisfies both DescribeCapable and WorkdirState protocols.
     if pre_parse:
+        # explicit callable: the caller drives the checks entirely
         pre_parse(wd)
+    else:
+        check_submodules(wd, config)
 
     version = version_from_describe(wd, config, describe_command)
 
+    if version is None and pre_parse is None:
+        version = _fetch_and_retry_describe(wd, config, describe_command)
+
     if version is None:
-        # If 'git git_describe_command' failed, try to get the information otherwise.
+        # No tag matched, so the version below is invented rather than reported.
+        _diagnose_missing_tag(wd, config, handled_by_pre_parse=pre_parse is not None)
         tag = config.version_cls(config.fallback_version or "0.0")
         node = wd.node()
         if node is None:
@@ -543,7 +649,12 @@ def _git_parse_inner(
             node = "g" + node
             dirty = wd.is_dirty()
         version = meta(
-            tag=tag, distance=distance, dirty=dirty, node=node, config=config
+            tag=tag,
+            distance=distance,
+            dirty=dirty,
+            node=node,
+            config=config,
+            tag_found=False,
         )
     branch = wd.get_branch()
     node_date = wd.get_head_date()
@@ -620,7 +731,7 @@ def archival_to_version(
         )
         return None
     else:
-        return meta("0.0", node=node, config=config)
+        return meta("0.0", node=node, config=config, tag_found=False)
 
 
 def parse_archival(root: _t.PathT, config: Configuration) -> ScmVersion | None:

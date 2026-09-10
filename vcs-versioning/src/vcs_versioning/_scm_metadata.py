@@ -38,6 +38,12 @@ class ScmVersionData:
     dirty: bool
     branch: str | None
     node_date: str | None
+    tag_found: bool = True
+    """``False`` when no SCM tag matched and the tag was invented.
+
+    Defaults to ``True`` so metadata written by older versions -- which had no
+    such notion -- keeps reading as "a tag was found".
+    """
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +72,7 @@ def read_scm_version_data(source_dir: Path) -> ScmVersionData | None:
             dirty=bool(raw.get("dirty", False)),
             branch=raw.get("branch"),
             node_date=raw.get("node_date"),
+            tag_found=bool(raw.get("tag_found", True)),
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         log.warning("failed to read %s: %s", path, exc)
@@ -114,4 +121,5 @@ def scm_version_data_from_scm_version(
         dirty=scm_version.dirty,
         branch=scm_version.branch,
         node_date=node_date_str,
+        tag_found=getattr(scm_version, "tag_found", True),
     )

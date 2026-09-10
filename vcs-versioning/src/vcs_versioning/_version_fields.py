@@ -37,3 +37,6 @@ class VersionFields(Protocol):
 
     @property
     def node_date(self) -> date | str | None: ...
+
+    @property
+    def tag_found(self) -> bool: ...

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from .. import _discover as discover
 from .. import _types as _t
-from .._config import Configuration
+from .._config import Configuration, OnAction
 from .._integration import data_from_mime
 from .._run_cmd import CompletedProcess as _CompletedProcess
 from .._run_cmd import require_command as _require_command
@@ -466,12 +466,6 @@ def fail_on_missing_submodules(wd: GitWorkdir) -> None:
 
 
 # Mapping from enum items to actual pre_parse functions
-_GIT_PRE_PARSE_FUNCTIONS: dict[GitPreParse, Callable[[GitWorkdir], None]] = {
-    GitPreParse.WARN_ON_SHALLOW: warn_on_shallow,
-    GitPreParse.FAIL_ON_SHALLOW: fail_on_shallow,
-    GitPreParse.FETCH_ON_SHALLOW: fetch_on_shallow,
-    GitPreParse.FAIL_ON_MISSING_SUBMODULES: fail_on_missing_submodules,
-}
 
 
 def check_submodules(
@@ -482,8 +476,6 @@ def check_submodules(
     Genuinely a pre-parse check: it has nothing to do with tags, so it runs
     before ``git describe`` like ``pre_parse`` always did.
     """
-    from .._config import OnAction
-
     action = config.on.missing_submodules
     if action is OnAction.IGNORE:
         return
@@ -574,8 +566,6 @@ def _fetch_and_retry_describe(
     Only reached once describe has already failed, so an already-deep-enough
     shallow clone never pays for a network round-trip.
     """
-    from .._config import OnAction
-
     if config.on.shallow is not OnAction.FETCH or not wd.is_shallow():
         return None
     warnings.warn(
@@ -583,6 +573,17 @@ def _fetch_and_retry_describe(
     )
     wd.fetch_shallow()
     return version_from_describe(wd, config, describe_command)
+
+
+#: how loud each action is, for picking between two that both apply.
+#: ``FETCH`` is a remedy attempted before diagnosis rather than a report, so by
+#: the time we get here it has already had its turn and says nothing.
+_ACTION_SEVERITY: dict[OnAction, int] = {
+    OnAction.IGNORE: 0,
+    OnAction.FETCH: 0,
+    OnAction.WARN: 1,
+    OnAction.FAIL: 2,
+}
 
 
 def _diagnose_missing_tag(
@@ -593,20 +594,35 @@ def _diagnose_missing_tag(
 ) -> None:
     """Report a describe that found nothing, per ``on.shallow`` / ``on.missing_tag``.
 
-    Shallowness is the more specific diagnosis of the same failure, so it wins
-    when it applies and falls through to ``on.missing_tag`` when set to
-    ``ignore``.  Everything here runs only on the already-failed path, so the
-    extra ``git tag -l`` costs nothing in the normal case.
-    """
-    from .._config import OnAction
+    A shallow clone with no reachable tag satisfies both conditions at once, so
+    the louder of the two actions is the one that runs.  Shallowness used to
+    answer first regardless, which silently downgraded an explicit
+    ``on.missing_tag = "fail"`` to the default shallow warning and let the build
+    continue with an invented version (#1506).
 
-    if not handled_by_pre_parse and wd.is_shallow():
-        # an explicit pre_parse callable owns the shallow story instead
-        if config.on.shallow is OnAction.FAIL:
+    On a tie shallowness still wins, because it is the more specific diagnosis
+    and carries the actionable ``git fetch --unshallow``.
+
+    Everything here runs only on the already-failed path, so the extra
+    ``git tag -l`` costs nothing in the normal case.
+    """
+    if handled_by_pre_parse:
+        # an explicit pre_parse callable owns the whole story instead
+        return
+
+    shallow_action = config.on.shallow if wd.is_shallow() else OnAction.IGNORE
+    tag_action = config.on.missing_tag
+    if config.fallback_version is not None:
+        # an explicit opt-in to "no tag is fine" -- it says nothing about depth,
+        # so it silences the missing-tag half only
+        tag_action = OnAction.IGNORE
+
+    if _ACTION_SEVERITY[shallow_action] >= _ACTION_SEVERITY[tag_action]:
+        if shallow_action is OnAction.FAIL:
             raise ValueError(
                 f'{wd.path} is shallow, please correct with "git fetch --unshallow"'
             )
-        if config.on.shallow is OnAction.WARN:
+        if shallow_action is OnAction.WARN:
             warnings.warn(f'"{wd.path}" is shallow and may cause errors', stacklevel=2)
             return
 

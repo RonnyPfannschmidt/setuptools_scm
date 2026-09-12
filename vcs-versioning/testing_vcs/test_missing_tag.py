@@ -224,6 +224,39 @@ def test_shallow_and_missing_tag_can_both_be_set(shallow_tagless_wd: Path) -> No
         parse(shallow_tagless_wd, config)
 
 
+def test_missing_tag_fail_is_not_downgraded_by_shallowness(
+    shallow_tagless_wd: Path,
+) -> None:
+    """An explicit ``fail`` outranks the default shallow ``warn``.
+
+    Shallowness used to answer first whatever the other setting said, so this
+    warned and handed back an invented ``0.1.dev1+g<hash>`` -- the outcome
+    #1506 exists to prevent.  Note ``on.shallow`` is left at its default here;
+    that is the whole point.
+    """
+    config = Configuration(on=on(missing_tag=OnAction.FAIL))
+    with pytest.raises(ValueError, match="no version tag found"):
+        parse(shallow_tagless_wd, config)
+
+
+def test_shallow_warn_still_wins_a_tie(
+    shallow_tagless_wd: Path, recwarn: pytest.WarningsRecorder
+) -> None:
+    """Equal severity keeps the more specific diagnosis and its remedy."""
+    config = Configuration(on=on(shallow=OnAction.WARN, missing_tag=OnAction.WARN))
+    parse(shallow_tagless_wd, config)
+    assert any("is shallow and may cause errors" in str(w.message) for w in recwarn)
+
+
+def test_fallback_version_does_not_silence_shallow(
+    shallow_tagless_wd: Path, recwarn: pytest.WarningsRecorder
+) -> None:
+    """``fallback_version`` says a tag is optional, not that depth is fine."""
+    config = Configuration(fallback_version="1.2.3", on=on(shallow=OnAction.WARN))
+    parse(shallow_tagless_wd, config)
+    assert any("is shallow and may cause errors" in str(w.message) for w in recwarn)
+
+
 def test_shallow_fetch_retries_describe(
     shallow_tagless_wd: Path, recwarn: pytest.WarningsRecorder
 ) -> None:

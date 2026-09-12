@@ -270,7 +270,18 @@ class TestShallow:
     ) -> None:
         """A truncated history can miss every relevant commit and report zero."""
         clone = tmp_path / "shallow"
-        monorepo(f"git clone -q --depth 1 file://{monorepo.cwd} {clone}")
+        # A list command, and as_uri() for the source: shlex.split() eats the
+        # backslashes of a windows path, and --depth needs a file:// URL to
+        # produce a shallow clone at all.
+        monorepo(
+            [
+                *("git", "clone", "-q"),
+                *("--depth", "1"),
+                monorepo.cwd.as_uri(),
+                str(clone),
+            ]
+        )
+        assert (clone / ".git" / "shallow").is_file(), "clone was not shallow"
         shallow = WorkDir(clone)
         shallow.configure_git_commands()
 

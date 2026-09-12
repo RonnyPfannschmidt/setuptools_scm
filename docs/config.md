@@ -225,10 +225,21 @@ strict = true      # require tags to contain at least one dot
     ```
 
 `on.shallow: "ignore" | "warn" | "fail" | "fetch" = "warn"` (git only)
-:   What to do when the clone is shallow **and** that is why no tag was found.
-    A shallow clone that still reaches a matching tag is never reported, and
-    `"fetch"` will not unshallow it. `"ignore"` falls through to
-    `on.missing_tag`.
+:   What to do when the clone is shallow. A shallow clone that still reaches a
+    matching tag produces a correct version and is never reported, and
+    `"fetch"` will not unshallow it.
+
+    When it *is* reported, the louder of `on.shallow` and `on.missing_tag`
+    wins, so an explicit `on.missing_tag = "fail"` is never downgraded to a
+    shallow warning. On a tie shallowness wins, since it carries the
+    actionable `git fetch --unshallow`.
+
+    With `scm.git.distance_scope` the stakes change: a
+    truncated history does not merely hide a tag, it makes the commit count
+    wrong even when a tag *is* found. There `on.shallow` is answered before
+    describe, `"fetch"` unshallows so the count can be answered properly, and
+    leaving the setting at its default keeps the hard failure -- a default is
+    not a decision to accept a wrong version.
 
 `on.missing_submodules: "ignore" | "warn" | "fail" = "ignore"` (git only)
 :   What to do when `.gitmodules` declares submodules that are not initialized.

@@ -683,23 +683,54 @@ def apply_distance_scope(
     return scoped, wd.is_dirty_in_scope(paths)
 
 
-def _fail_on_shallow_scope(wd: DistanceScopeCapable, config: Configuration) -> None:
-    """A shallow clone cannot answer a path-restricted count.
+SHALLOW_SCOPE_DIAGNOSTIC = (
+    "%s is shallow and scm.git.distance_scope is enabled;"
+    ' the path-restricted distance would be wrong. Correct with "git'
+    ' fetch --unshallow", set on.shallow = "fetch" to do that automatically,'
+    " or drop distance_scope."
+)
 
-    ``warn_on_shallow`` is enough for a repository-wide distance, which merely
-    ends up too small.  A scoped count walks history looking for commits that
-    touch the paths, so a truncated history does not just shorten the answer --
-    it can miss every relevant commit and report zero, which reads as an exact
-    tag.
+
+def _apply_shallow_scope_policy(
+    wd: DistanceScopeCapable, config: Configuration
+) -> None:
+    """Answer ``on.shallow`` before a path-restricted count is attempted.
+
+    A repository-wide distance on a shallow clone merely ends up too small.  A
+    scoped count walks history looking for commits that touch the paths, so a
+    truncated history can miss every relevant commit and report zero, which
+    reads as an exact tag.  The answer is therefore a wrong number rather than
+    a missing diagnostic, and it has to be settled before describe rather than
+    after -- unlike the missing-tag case, it applies even when describe
+    succeeds.
+
+    ``fetch`` rescues the count outright, which the hard error this replaces
+    never allowed.  An explicit ``on.shallow`` is honoured; leaving it at the
+    default keeps the hard failure, because a default is not a decision to
+    accept a wrong version (:issue:`1056`, :issue:`1506`).
     """
     if config.scm.git.scope_paths is None:
         return
-    if wd.is_shallow() and not wd.head_is_exact_tag():
-        raise ValueError(
-            f"{wd.path} is shallow and scm.git.distance_scope is enabled;"
-            ' the path-restricted distance would be wrong. Correct with "git'
-            ' fetch --unshallow", or drop distance_scope.'
+    if not wd.is_shallow() or wd.head_is_exact_tag():
+        # HEAD on a tag is distance 0 whatever the paths, so nothing is counted
+        return
+
+    chosen = "shallow" in config.on.explicitly_set()
+    action = config.on.shallow if chosen else OnAction.FAIL
+
+    if action is OnAction.FETCH:
+        warnings.warn(
+            f'"{wd.path}" was shallow, git fetch was used to rectify',
+            stacklevel=2,
         )
+        wd.fetch_shallow()
+        return
+    if action is OnAction.IGNORE:
+        return
+    if action is OnAction.WARN:
+        warnings.warn(SHALLOW_SCOPE_DIAGNOSTIC % wd.path, stacklevel=2)
+        return
+    raise ValueError(SHALLOW_SCOPE_DIAGNOSTIC % wd.path)
 
 
 def version_from_describe(
@@ -817,9 +848,10 @@ def _git_parse_inner(
     describe_command: _t.CMD_TYPE | None = None,
 ) -> ScmVersion:
     # wd satisfies both DescribeCapable and WorkdirState protocols.
-    # The scope guard runs first: it is a hard error, and warn_on_shallow would
-    # otherwise report the same shallow clone as a mere warning.
-    _fail_on_shallow_scope(wd, config)
+    # Scope policy runs first: it governs the count itself, so it applies even
+    # when describe goes on to succeed, and "fetch" has to happen before the
+    # count rather than after a failed describe.
+    _apply_shallow_scope_policy(wd, config)
     if pre_parse:
         # explicit callable: the caller drives the checks entirely
         pre_parse(wd)

@@ -322,6 +322,7 @@ def get_version(
     normalize: bool = True,
     search_parent_directories: bool = False,
     scm: dict[str, Any] | None = None,
+    on: dict[str, Any] | None = None,
     _env: VcsEnvironment | None = None,
 ) -> str:
     """
@@ -347,6 +348,7 @@ def get_version(
         tag_config = TagConfiguration(regex=parse_tag_regex(tag_regex))
 
     scm_config = _config.ScmConfiguration.from_data(data=scm)
+    on_config = _config.OnConfiguration.from_data(data=on)
 
     if _env is None:
         _env = resolve_runtime_env()
@@ -369,6 +371,7 @@ def get_version(
         version_cls=version_cls,
         search_parent_directories=search_parent_directories,
         scm=scm_config,
+        on=on_config,
         tag=tag_config,
         _env=_env,
     )

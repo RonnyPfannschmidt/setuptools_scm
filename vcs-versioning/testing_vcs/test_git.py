@@ -829,10 +829,10 @@ def test_fail_on_missing_submodules_with_uninitialized_submodules(
 
 
 def test_git_pre_parse_config_integration(wd: WorkDir) -> None:
-    """Test that git_pre_parse configuration is used by the parse function."""
+    """The deprecated git_pre_parse configuration still drives the parse."""
     wd.commit_testfile()
 
-    # Test with default (None) - should use warn_on_shallow
+    # Test with default (unset) - the on.* defaults apply
     config = Configuration()
     result = git.parse(str(wd.cwd), config)
     assert result is not None
@@ -840,20 +840,24 @@ def test_git_pre_parse_config_integration(wd: WorkDir) -> None:
     # Test with explicit configuration
     from vcs_versioning._config import GitConfiguration, ScmConfiguration
 
-    config_with_pre_parse = Configuration(
-        scm=ScmConfiguration(
-            git=GitConfiguration(pre_parse=git.GitPreParse.WARN_ON_SHALLOW)
+    with pytest.warns(DeprecationWarning, match="scm.git.pre_parse"):
+        config_with_pre_parse = Configuration(
+            scm=ScmConfiguration(
+                git=GitConfiguration(pre_parse=git.GitPreParse.WARN_ON_SHALLOW)
+            )
         )
-    )
     result = git.parse(str(wd.cwd), config_with_pre_parse)
     assert result is not None
 
     # Test with different pre_parse value
-    config_fail_shallow = Configuration(
-        scm=ScmConfiguration(
-            git=GitConfiguration(pre_parse=git.GitPreParse.FAIL_ON_MISSING_SUBMODULES)
+    with pytest.warns(DeprecationWarning, match="scm.git.pre_parse"):
+        config_fail_shallow = Configuration(
+            scm=ScmConfiguration(
+                git=GitConfiguration(
+                    pre_parse=git.GitPreParse.FAIL_ON_MISSING_SUBMODULES
+                )
+            )
         )
-    )
     result = git.parse(str(wd.cwd), config_fail_shallow)
     assert result is not None
 
@@ -869,7 +873,8 @@ pre_parse = "fail_on_missing_submodules"
     pyproject_path.write_text(pyproject_content, encoding="utf-8")
 
     # Parse the configuration from file
-    config = Configuration.from_file(pyproject_path)
+    with pytest.warns(DeprecationWarning, match="scm.git.pre_parse"):
+        config = Configuration.from_file(pyproject_path)
 
     # Verify the nested configuration was parsed correctly and converted to enum
     assert config.scm.git.pre_parse == git.GitPreParse.FAIL_ON_MISSING_SUBMODULES
@@ -881,7 +886,8 @@ def test_nested_scm_git_config_from_data() -> None:
     config_data = {"scm": {"git": {"pre_parse": "fail_on_missing_submodules"}}}
 
     # Parse the configuration data
-    config = Configuration.from_data(relative_to=".", data=config_data)
+    with pytest.warns(DeprecationWarning, match="scm.git.pre_parse"):
+        config = Configuration.from_data(relative_to=".", data=config_data)
 
     # Verify the nested configuration was parsed correctly and converted to enum
     assert config.scm.git.pre_parse == git.GitPreParse.FAIL_ON_MISSING_SUBMODULES

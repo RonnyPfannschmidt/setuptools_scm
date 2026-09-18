@@ -54,6 +54,7 @@ class VersionExpectations(TypedDict, total=False):
     preformatted: bool
     node_date: date | None
     time: datetime | None
+    tag_found: bool
 
 
 @dataclasses.dataclass
@@ -229,6 +230,14 @@ class ScmVersion:
     """the branch name if any"""
     node_date: date | None = None
     """the date of the commit if available"""
+    tag_found: bool = True
+    """whether :attr:`tag` came from the SCM
+
+    ``False`` when no tag matched and the tag was invented from
+    ``fallback_version`` (or ``0.0``), so the resulting version says nothing
+    about what was actually released.  ``version_scheme`` implementations can
+    use this to reject a build that would otherwise get a bogus version.
+    """
     time: datetime = dataclasses.field(default_factory=_source_epoch_or_utc_now)
     """the current time or source epoch time
     only set for unit-testing version schemes
@@ -312,6 +321,7 @@ class ScmVersion:
             "preformatted": lambda: self.preformatted,
             "node_date": lambda: self.node_date,
             "time": lambda: self.time,
+            "tag_found": lambda: self.tag_found,
         }
 
         # Build actual values dict
@@ -368,6 +378,7 @@ class _ScmVersionKwargs(TypedDict, total=False):
     preformatted: bool
     branch: str | None
     node_date: date | None
+    tag_found: bool
     time: datetime
 
 
@@ -382,6 +393,7 @@ def meta(
     config: _config.Configuration,
     node_date: date | None = None,
     time: datetime | None = None,
+    tag_found: bool = True,
 ) -> ScmVersion:
     parsed_version: _Version | None
     if preformatted and isinstance(tag, str):
@@ -405,6 +417,7 @@ def meta(
         "preformatted": preformatted,
         "branch": branch,
         "node_date": node_date,
+        "tag_found": tag_found,
     }
     if time is not None:
         kwargs["time"] = time

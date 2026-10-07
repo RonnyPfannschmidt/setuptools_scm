@@ -113,6 +113,19 @@ something a factory can control. Rank by how much the workdir knows:
 Configures how the version number is constructed given a
 [ScmVersion][vcs_versioning.ScmVersion] instance and should return a string
 representing the version.
+
+!!! tip "Detecting an invented tag"
+
+    `ScmVersion.tag_found` is `False` when no tag matched and the `0.0` tag was
+    invented, so a scheme can refuse to emit a version for no release:
+
+    ```python
+    if not version.tag_found:
+        raise RuntimeError("refusing to build without a release tag")
+    ```
+
+    [`on.missing_tag`](config.md) does the same without writing a scheme.
+
 ### Available implementations
 
 `guess-next-dev (default)`

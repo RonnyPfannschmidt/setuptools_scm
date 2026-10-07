@@ -115,6 +115,16 @@ class GitWorkdirHgClient(GitWorkdir, HgWorkdir):
     def is_shallow(self) -> bool:
         return False
 
+    def has_any_tags(self) -> bool:
+        """Ask hg, not git.
+
+        ``run_git`` pins ``--git-dir`` to ``<root>/.git``, which an hg checkout
+        does not have, so the inherited git implementation would answer from
+        the wrong place -- or raise, where git is not installed at all.
+        """
+        res = self.run_hg(["tags", "-T", "{tag}\n"])
+        return bool({line for line in res.stdout.split() if line != "tip"})
+
     def fetch_shallow(self) -> None:
         pass
 

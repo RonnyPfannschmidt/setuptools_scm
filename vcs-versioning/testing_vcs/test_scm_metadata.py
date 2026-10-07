@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,44 @@ class TestScmVersionDataRoundTrip:
             "dirty": False,
             "branch": "main",
             "node_date": "2024-01-15",
+            "tag_found": True,
         }
+
+    @pytest.mark.issue(1506)
+    def test_tag_found_round_trip(self, tmp_path: Path) -> None:
+        data = ScmVersionData(
+            tag="0.0",
+            distance=3,
+            node="gabc1234",
+            dirty=False,
+            branch="main",
+            node_date=None,
+            tag_found=False,
+        )
+        write_scm_version_data(tmp_path, data)
+        result = read_scm_version_data(tmp_path)
+        assert result is not None
+        assert result.tag_found is False
+
+    @pytest.mark.issue(1506)
+    def test_tag_found_defaults_true_for_older_metadata(self, tmp_path: Path) -> None:
+        """Metadata written before tag_found existed still reads as "tagged"."""
+        (tmp_path / "scm_version.json").write_text(
+            json.dumps(
+                {
+                    "tag": "1.2.3",
+                    "distance": 0,
+                    "node": None,
+                    "dirty": False,
+                    "branch": None,
+                    "node_date": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = read_scm_version_data(tmp_path)
+        assert result is not None
+        assert result.tag_found is True
 
     def test_creates_directory(
         self, tmp_path: Path, sample_data: ScmVersionData

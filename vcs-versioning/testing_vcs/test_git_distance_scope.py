@@ -18,7 +18,7 @@ from vcs_versioning._backends._git import (
     archival_to_version,
     resolve_scope_paths,
 )
-from vcs_versioning._config import GitConfiguration
+from vcs_versioning._config import GitConfiguration, OnAction, OnConfiguration
 from vcs_versioning._scm_version import ScmVersion
 from vcs_versioning._test_utils import WorkDir
 
@@ -44,7 +44,11 @@ def touch(wd: WorkDir, path: str, reason: str) -> None:
 
 
 def project_version(
-    wd: WorkDir, project: str = PKG_A, tag_prefix: str = "", **git_kw: object
+    wd: WorkDir,
+    project: str = PKG_A,
+    tag_prefix: str = "",
+    on: OnConfiguration | None = None,
+    **git_kw: object,
 ) -> ScmVersion:
     """The ``ScmVersion`` a project inside the monorepo infers."""
     pyproject = wd.cwd / project / "pyproject.toml"
@@ -53,6 +57,8 @@ def project_version(
         pyproject.write_text('[project]\nname = "x"\n', encoding="utf-8")
     depth = len(Path(project).parts)
     config = Configuration(relative_to=str(pyproject), root="/".join([".."] * depth))
+    if on is not None:
+        config.on = on
     config.tag.prefix = tag_prefix
     for key, value in git_kw.items():
         setattr(config.scm.git, key, value)
@@ -265,10 +271,14 @@ class TestTagNamespaceDiagnostic:
 
 
 class TestShallow:
-    def test_scoped_count_refuses_a_shallow_clone(
-        self, monorepo: WorkDir, tmp_path: Path
-    ) -> None:
-        """A truncated history can miss every relevant commit and report zero."""
+    """``on.shallow`` governs the scoped count (:issue:`1506`).
+
+    Unlike the missing-tag case this is settled *before* describe: a truncated
+    history makes the number wrong even when describe succeeds.
+    """
+
+    @pytest.fixture
+    def shallow(self, monorepo: WorkDir, tmp_path: Path) -> WorkDir:
         clone = tmp_path / "shallow"
         # A list command, and as_uri() for the source: shlex.split() eats the
         # backslashes of a windows path, and --depth needs a file:// URL to
@@ -282,11 +292,81 @@ class TestShallow:
             ]
         )
         assert (clone / ".git" / "shallow").is_file(), "clone was not shallow"
-        shallow = WorkDir(clone)
-        shallow.configure_git_commands()
+        wd = WorkDir(clone)
+        wd.configure_git_commands()
+        return wd
 
+    def test_scoped_count_refuses_a_shallow_clone(self, shallow: WorkDir) -> None:
+        """A truncated history can miss every relevant commit and report zero."""
         with pytest.raises(ValueError, match="shallow"):
             project_version(shallow, distance_scope=True)
+
+    def test_default_on_shallow_does_not_soften_it(self, shallow: WorkDir) -> None:
+        """``on.shallow`` defaults to ``warn``, but a default is not a decision.
+
+        Accepting a knowingly wrong version has to be asked for.
+        """
+        assert OnConfiguration().shallow is OnAction.WARN
+        with pytest.raises(ValueError, match="shallow"):
+            project_version(shallow, on=OnConfiguration(), distance_scope=True)
+
+    def test_explicit_fail(self, shallow: WorkDir) -> None:
+        on = OnConfiguration.from_data({"shallow": "fail"})
+        with pytest.raises(ValueError, match="distance_scope"):
+            project_version(shallow, on=on, distance_scope=True)
+
+    def test_explicit_warn_proceeds(
+        self, shallow: WorkDir, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        """Chosen explicitly, a warning is honoured -- the count may be wrong."""
+        on = OnConfiguration.from_data({"shallow": "warn"})
+        version = project_version(shallow, on=on, distance_scope=True)
+        assert version is not None
+        assert any("distance_scope" in str(w.message) for w in recwarn)
+
+    def test_explicit_ignore_is_silent(
+        self, shallow: WorkDir, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        on = OnConfiguration.from_data({"shallow": "ignore"})
+        version = project_version(shallow, on=on, distance_scope=True)
+        assert version is not None
+        assert not [w for w in recwarn if "distance_scope" in str(w.message)]
+
+    def test_fetch_rescues_the_count(
+        self, shallow: WorkDir, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        """The remedy the hard error never allowed.
+
+        Unshallowing happens before the count, so the scoped distance is then
+        answered against complete history rather than refused.
+        """
+        on = OnConfiguration.from_data({"shallow": "fetch"})
+        version = project_version(shallow, on=on, distance_scope=True)
+        assert any("used to rectify" in str(w.message) for w in recwarn)
+        assert version is not None
+
+        unscoped = project_version(shallow, on=on)
+        assert version.distance <= unscoped.distance
+
+    def test_head_on_a_tag_needs_no_history(
+        self, monorepo: WorkDir, tmp_path: Path
+    ) -> None:
+        """Distance is 0 whatever the paths, so nothing is counted."""
+        monorepo("git tag v9.9.9")
+        clone = tmp_path / "shallow_tagged"
+        monorepo(
+            [
+                *("git", "clone", "-q"),
+                *("--depth", "1"),
+                monorepo.cwd.as_uri(),
+                str(clone),
+            ]
+        )
+        wd = WorkDir(clone)
+        wd.configure_git_commands()
+        wd(["git", "fetch", "-q", "--depth=1", "origin", "refs/tags/*:refs/tags/*"])
+        version = project_version(wd, distance_scope=True)
+        assert version.distance == 0
 
 
 class TestUnsupportedWorkdir:

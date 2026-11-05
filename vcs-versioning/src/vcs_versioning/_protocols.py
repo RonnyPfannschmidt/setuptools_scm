@@ -121,6 +121,8 @@ class DistanceScopeCapable(DescribeCapable, Protocol):
 
     def head_is_exact_tag(self) -> bool: ...
 
+    def fetch_shallow(self) -> None: ...
+
 
 class WorkdirState(Protocol):
     """Post-describe enrichment: what _git_parse_inner reads after describe.

@@ -28,7 +28,7 @@ from .._run_cmd import CompletedProcess as _CompletedProcess
 from .._run_cmd import require_command as _require_command
 from .._run_cmd import run as _run
 from .._scm_version import ScmVersion, meta
-from ._scm_workdir import Workdir
+from ._scm_workdir import Workdir, report_missing_tag
 
 if TYPE_CHECKING:
     from .._config import Configuration
@@ -249,6 +249,7 @@ class JjWorkdir(Workdir):
                 config=config,
             )
         else:
+            report_missing_tag(config, self.path)
             tag = config.version_cls(config.fallback_version or "0.0")
             if node is None:
                 distance = 0
@@ -257,7 +258,12 @@ class JjWorkdir(Workdir):
                 distance = self._count_ancestors(node)
                 node = "j" + node[:12]
             version = meta(
-                tag=tag, distance=distance, dirty=dirty, node=node, config=config
+                tag=tag,
+                distance=distance,
+                dirty=dirty,
+                node=node,
+                config=config,
+                tag_found=False,
             )
 
         branch = self.get_branch()

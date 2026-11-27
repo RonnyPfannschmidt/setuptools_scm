@@ -1,1 +1,1 @@
-.git_archival.txt  export-subst
+# export-subst removed on purpose: throwaway check of the pypa/setuptools-scm#1435 annotation
